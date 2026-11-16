@@ -10,18 +10,15 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
     private static final long serialVersionUID = 1L;
     private EspConnection connection;
 
-    // верхняя панель
     private JComboBox<String> comboPorts;
-    private JButton btnConnect, btnRefresh, btnScopeToggle;
+    private JButton btnConnect, btnRefresh, btnScopeToggle, btnMode;
     private JTextField txtCmd;
 
-    // частота и PLL
     private JTextField txtFreq;
     private JComboBox<Integer> cbPower, cbCpCurrent;
     private JComboBox<String> cbLdMode;
     private JButton btnApply;
 
-    // сканер
     private JTextField txtSweepStart, txtSweepStop, txtSweepStep;
     private JButton btnSweepToggle;
     private boolean sweeping = false;
@@ -30,19 +27,20 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
     private JLabel lblFloorDb, lblTopDb, lblBeat;
     private JCheckBox chkFftView, chkAutoZoom;
     private double lastPickedFreq = Double.NaN;
-    private double coarsePeakFreq = Double.NaN;
     private double actualFs = 14000;
     private double lastBeatHz = Double.NaN;
     private double tuneBaseLo, tuneBeatMHz;
 
-    // низ
     private JLabel lblStatus;
     private JTextArea textLog;
     private OscilloscopePanel scopePanel;
+    private LevelPanel levelPanel;
     private SpectrumPanel spectrumPanel;
     private FFTProcessor fftProcessor;
+    private JPanel viewCard;
+    private CardLayout viewLayout;
+    private boolean levelMode = false;
 
-    // управление осциллографом
     private JSlider sldTimeDiv, sldVoltDiv, sldTrigger;
     private JSpinner spinPosX, spinPosY;
     private JButton btnPauseResume;
@@ -111,16 +109,20 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnConnect.setForeground(Color.WHITE);
         btnConnect.addActionListener(e -> toggleConnection());
         top.add(btnConnect);
-        top.add(Box.createHorizontalStrut(15));
+        top.add(Box.createHorizontalStrut(12));
         btnScopeToggle = new JButton();
         styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
         btnScopeToggle.setEnabled(false);
         btnScopeToggle.addActionListener(e -> toggleScope());
         top.add(btnScopeToggle);
-        top.add(Box.createHorizontalStrut(15));
+        btnMode = new JButton("📈 LEVEL");
+        btnMode.setEnabled(false);
+        btnMode.addActionListener(e -> toggleMode());
+        top.add(btnMode);
+        top.add(Box.createHorizontalStrut(12));
         top.add(new JLabel("CMD:"));
-        txtCmd = new JTextField("ADC_BENCH", 14);
-        txtCmd.setPreferredSize(new Dimension(160, 28));
+        txtCmd = new JTextField("ADC_BENCH", 12);
+        txtCmd.setPreferredSize(new Dimension(140, 28));
         txtCmd.addActionListener(e -> sendCmd());
         top.add(txtCmd);
         JButton btnCmd = new JButton("Send");
@@ -155,7 +157,12 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         scopePanel = new OscilloscopePanel();
         scopePanel.setPreferredSize(new Dimension(400, 230));
         scopePanel.setSampleRate(14000);
-        scopeInner.setLeftComponent(scopePanel);
+        levelPanel = new LevelPanel();
+        viewLayout = new CardLayout();
+        viewCard = new JPanel(viewLayout);
+        viewCard.add(scopePanel, "scope");
+        viewCard.add(levelPanel, "level");
+        scopeInner.setLeftComponent(viewCard);
         scopeInner.setRightComponent(createScopeControlPanel());
         scopeArea.add(scopeInner, BorderLayout.CENTER);
 
@@ -248,7 +255,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         scale.add(new JLabel("IF (Hz):"));
         spinIfHz = new JSpinner(new SpinnerNumberModel(300, 0, 20000, 100));
         spinIfHz.setPreferredSize(new Dimension(80, 26));
-        spinIfHz.setToolTipText("LO = RF + IF. Держите IF ≈ fs/40 … fs/20");
+        spinIfHz.setToolTipText("LO = RF + IF");
         scale.add(spinIfHz);
         lblBeat = new JLabel("beat: —");
         lblBeat.setForeground(new Color(0, 100, 0));
@@ -274,7 +281,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         scale.add(Box.createHorizontalStrut(10));
         scale.add(new JLabel("Floor dB:"));
         sldFloorDb = new JSlider(0, 60, 30);
-        sldFloorDb.setPreferredSize(new Dimension(110, 24));
+        sldFloorDb.setPreferredSize(new Dimension(100, 24));
         lblFloorDb = new JLabel("30");
         sldFloorDb.addChangeListener(e -> {
             spectrumPanel.setFloorDb(sldFloorDb.getValue());
@@ -285,7 +292,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
 
         scale.add(new JLabel("Top dB:"));
         sldTopDb = new JSlider(40, 72, 66);
-        sldTopDb.setPreferredSize(new Dimension(110, 24));
+        sldTopDb.setPreferredSize(new Dimension(100, 24));
         lblTopDb = new JLabel("66");
         sldTopDb.addChangeListener(e -> {
             spectrumPanel.setTopDb(sldTopDb.getValue());
@@ -298,10 +305,10 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         chkFftView.addActionListener(e -> spectrumPanel.setShowFft(chkFftView.isSelected()));
         scale.add(chkFftView);
         chkAutoZoom = new JCheckBox("Auto zoom", true);
-        chkAutoZoom.setToolTipText("После грубого скана автоматически точный скан ±20 кГц шагом 100 Гц");
+        chkAutoZoom.setToolTipText("После грубого скана — точный ±20 кГц шагом 100 Гц");
         scale.add(chkAutoZoom);
         JButton btnClearMarks = new JButton("Clear marks");
-        btnClearMarks.addActionListener(e -> spectrumPanel.clearMarkers());
+        btnClearMarks.addActionListener(e -> { spectrumPanel.clearMarkers(); levelPanel.clear(); });
         scale.add(btnClearMarks);
         panel.add(scale, BorderLayout.CENTER);
 
@@ -314,7 +321,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
 
     private JPanel createScopeControlPanel() {
         JPanel p = new JPanel(new GridBagLayout());
-        p.setBorder(BorderFactory.createTitledBorder("Scope Controls"));
+        p.setBorder(BorderFactory.createTitledBorder("Scope / Level Controls"));
         GridBagConstraints gc = new GridBagConstraints();
         gc.insets = new Insets(2, 5, 2, 5);
         gc.anchor = GridBagConstraints.WEST;
@@ -368,6 +375,11 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnAutoTune.setForeground(Color.WHITE);
         btnAutoTune.addActionListener(e -> autoTune());
         p.add(btnAutoTune, gc);
+
+        gc.gridy = 9;
+        JCheckBox chkHold = new JCheckBox("Level max hold", true);
+        chkHold.addActionListener(e -> levelPanel.setHold(chkHold.isSelected()));
+        p.add(chkHold, gc);
         return p;
     }
 
@@ -380,6 +392,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
                 if (nv < 23.5f) nv = 23.5f;
                 if (nv > 6000f) nv = 6000f;
                 txtFreq.setText(String.format(java.util.Locale.US, "%.6f", nv));
+                if (levelMode) sendAll();
             } catch (NumberFormatException ex) {
                 JOptionPane.showMessageDialog(this, "Некорректное значение частоты!", "Ошибка", JOptionPane.WARNING_MESSAGE);
             }
@@ -394,8 +407,30 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnPauseResume.setBackground(!paused ? new Color(0, 150, 0) : new Color(200, 150, 0));
     }
 
+    private void toggleMode() {
+        if (!connection.isOpen()) return;
+        levelMode = !levelMode;
+        if (levelMode) {
+            if (connection.isStreamingActive()) {
+                connection.stopScopeStream();
+                styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
+            }
+            levelPanel.clear();
+            connection.sendRawText("MONITOR_START\n");
+            viewLayout.show(viewCard, "level");
+            btnMode.setText("📉 SCOPE");
+            notifyLog(">>> LEVEL MODE (амплитуда во времени)");
+        } else {
+            connection.sendRawText("MONITOR_STOP\n");
+            viewLayout.show(viewCard, "scope");
+            btnMode.setText("📈 LEVEL");
+            notifyLog(">>> SCOPE MODE");
+        }
+    }
+
     private void toggleScope() {
         if (!connection.isOpen()) return;
+        if (levelMode) toggleMode();
         if (connection.isStreamingActive()) {
             connection.stopScopeStream();
             styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
@@ -456,6 +491,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
             btnApply.setEnabled(true);
             btnScopeToggle.setEnabled(true);
             btnSweepToggle.setEnabled(true);
+            btnMode.setEnabled(true);
             setStatus(false, "UNLOCKED");
             sendAll();
             sendScopeCfg();
@@ -472,6 +508,10 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnScopeToggle.setEnabled(false);
         styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
         btnSweepToggle.setEnabled(false);
+        btnMode.setEnabled(false);
+        btnMode.setText("📈 LEVEL");
+        levelMode = false;
+        viewLayout.show(viewCard, "scope");
         resetSweepUi();
         setStatus(false, "DISCONNECTED");
         lblStatus.setBackground(Color.GRAY);
@@ -504,6 +544,12 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
                 connection.stopScopeStream();
                 styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
             }
+            if (levelMode) {
+                connection.sendRawText("MONITOR_STOP\n");
+                viewLayout.show(viewCard, "scope");
+                levelMode = false;
+                btnMode.setText("📈 LEVEL");
+            }
             spectrumPanel.setRange(start, stop);
             sweepDataPoints.clear();
             spectrumPanel.clearData();
@@ -530,7 +576,6 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         if (tuned < 23.5) tuned = 23.5;
         if (tuned > 6000.0) tuned = 6000.0;
         txtFreq.setText(String.format(java.util.Locale.US, "%.6f", tuned));
-        if (lblBeat != null) lblBeat.setText("beat: " + (int) ifHz + " Hz");
         notifyLog(String.format(java.util.Locale.US, ">>> RETUNE %.3f MHz +IF %.0f Hz -> LO %.6f MHz", pickedMHz, ifHz, tuned));
         sendAll();
     }
@@ -540,7 +585,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         if (sweeping) { connection.sendRawText("SWEEP_STOP\n"); resetSweepUi(); }
         lastPickedFreq = freqMHz;
         applyPicked(freqMHz);
-        if (!connection.isStreamingActive()) {
+        if (!levelMode && !connection.isStreamingActive()) {
             sendScopeCfg();
             connection.startScopeStream();
             styleToggle(btnScopeToggle, true, "⏹ SCOPE OFF");
@@ -588,6 +633,13 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
 
     @Override
     public void onLogMessage(String message) {
+        if (message.startsWith("LEVEL:")) {
+            try {
+                final int v = Integer.parseInt(message.substring(6).trim());
+                SwingUtilities.invokeLater(() -> levelPanel.addLevel(v));
+            } catch (Exception ignored) {}
+            return;
+        }
         if (message.startsWith("SCOPE_CFG ok:")) {
             try {
                 int i = message.indexOf("fs=");
@@ -606,7 +658,6 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
                 final double f = Double.parseDouble(p[0]);
                 SwingUtilities.invokeLater(() -> {
                     spectrumPanel.addMarker(f);
-                    coarsePeakFreq = f;
                     if (chkAutoZoom != null && chkAutoZoom.isSelected()) {
                         double stepK = Double.parseDouble(txtSweepStep.getText().trim().replace(',', '.'));
                         if (stepK > 0.5) {
