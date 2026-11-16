@@ -10,51 +10,58 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
     private static final long serialVersionUID = 1L;
     private EspConnection connection;
 
-    // --- верхняя панель ---
+    // верхняя панель
     private JComboBox<String> comboPorts;
     private JButton btnConnect, btnRefresh, btnScopeToggle;
+    private JTextField txtCmd;
 
-    // --- частота и PLL ---
+    // частота и PLL
     private JTextField txtFreq;
     private JComboBox<Integer> cbPower, cbCpCurrent;
     private JComboBox<String> cbLdMode;
     private JButton btnApply;
 
-    // --- сканер ---
+    // сканер
     private JTextField txtSweepStart, txtSweepStop, txtSweepStep;
     private JButton btnSweepToggle;
     private boolean sweeping = false;
     private JSpinner spinIfHz, spinFsKhz, spinFps;
     private JSlider sldFloorDb, sldTopDb;
-    private JLabel lblFloorDb, lblTopDb;
-    private JCheckBox chkFftView;
+    private JLabel lblFloorDb, lblTopDb, lblBeat;
+    private JCheckBox chkFftView, chkAutoZoom;
+    private double lastPickedFreq = Double.NaN;
+    private double coarsePeakFreq = Double.NaN;
+    private double actualFs = 14000;
+    private double lastBeatHz = Double.NaN;
+    private double tuneBaseLo, tuneBeatMHz;
 
-    // --- низ ---
+    // низ
     private JLabel lblStatus;
     private JTextArea textLog;
     private OscilloscopePanel scopePanel;
     private SpectrumPanel spectrumPanel;
     private FFTProcessor fftProcessor;
 
-    // --- управление осциллографом ---
+    // управление осциллографом
     private JSlider sldTimeDiv, sldVoltDiv, sldTrigger;
     private JSpinner spinPosX, spinPosY;
     private JButton btnPauseResume;
     private JCheckBox chkAutoScale;
+    private JLabel lblBeatBig;
 
     private final List<double[]> sweepDataPoints = new ArrayList<>();
 
     private static final Font FIELD_FONT = new Font("Monospaced", Font.BOLD, 14);
     private static final Color BTN_OFF_BG = new Color(225, 225, 228);
     private static final Color BTN_OFF_FG = new Color(20, 20, 20);
-    private static final Color BTN_ON_BG  = new Color(0, 140, 0);
-    private static final Color BTN_ON_FG  = Color.WHITE;
+    private static final Color BTN_ON_BG = new Color(0, 140, 0);
+    private static final Color BTN_ON_FG = Color.WHITE;
 
     public Max2870Gui() {
         super("MAX2870 Controller & Scope/Spectrum via ESP32");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1250, 1000);
-        setMinimumSize(new Dimension(1050, 800));
+        setSize(1280, 1000);
+        setMinimumSize(new Dimension(1080, 820));
         setLocationRelativeTo(null);
         connection = new EspConnection(this);
         fftProcessor = new FFTProcessor(512);
@@ -62,7 +69,6 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         refreshPorts();
     }
 
-    // ---------- вспомогательные ----------
     private JTextField makeFixedField(String value, int w, String tip) {
         JTextField f = new JTextField(value, 10);
         f.setFont(FIELD_FONT);
@@ -88,7 +94,6 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         b.setForeground(on ? BTN_ON_FG : BTN_OFF_FG);
     }
 
-    // ---------- построение интерфейса ----------
     private void initComponents() {
         setLayout(new BorderLayout(5, 5));
 
@@ -96,7 +101,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         top.setBorder(new EmptyBorder(6, 8, 6, 8));
         top.add(new JLabel("COM Port:"));
         comboPorts = new JComboBox<>();
-        comboPorts.setPreferredSize(new Dimension(140, 28));
+        comboPorts.setPreferredSize(new Dimension(130, 28));
         top.add(comboPorts);
         btnRefresh = new JButton("Refresh");
         btnRefresh.addActionListener(e -> refreshPorts());
@@ -106,12 +111,21 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnConnect.setForeground(Color.WHITE);
         btnConnect.addActionListener(e -> toggleConnection());
         top.add(btnConnect);
-        top.add(Box.createHorizontalStrut(20));
+        top.add(Box.createHorizontalStrut(15));
         btnScopeToggle = new JButton();
         styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
         btnScopeToggle.setEnabled(false);
         btnScopeToggle.addActionListener(e -> toggleScope());
         top.add(btnScopeToggle);
+        top.add(Box.createHorizontalStrut(15));
+        top.add(new JLabel("CMD:"));
+        txtCmd = new JTextField("ADC_BENCH", 14);
+        txtCmd.setPreferredSize(new Dimension(160, 28));
+        txtCmd.addActionListener(e -> sendCmd());
+        top.add(txtCmd);
+        JButton btnCmd = new JButton("Send");
+        btnCmd.addActionListener(e -> sendCmd());
+        top.add(btnCmd);
         add(top, BorderLayout.NORTH);
 
         JPanel center = new JPanel();
@@ -140,7 +154,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         scopeInner.setResizeWeight(0.75);
         scopePanel = new OscilloscopePanel();
         scopePanel.setPreferredSize(new Dimension(400, 230));
-        scopePanel.setSampleRate(40000);
+        scopePanel.setSampleRate(14000);
         scopeInner.setLeftComponent(scopePanel);
         scopeInner.setRightComponent(createScopeControlPanel());
         scopeArea.add(scopeInner, BorderLayout.CENTER);
@@ -165,7 +179,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
     private JPanel createManualFreqPanel() {
         JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
         p.add(new JLabel("Frequency (MHz):"));
-        txtFreq = makeFixedField("1000.000", 140, "Выходная частота MAX2870, МГц");
+        txtFreq = makeFixedField("1000.000000", 150, "Выходная частота MAX2870, МГц");
         p.add(txtFreq);
         p.add(createStepButton("-1 MHz", -1.0f));
         p.add(createStepButton("-100 kHz", -0.1f));
@@ -211,7 +225,6 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         JPanel panel = new JPanel(new BorderLayout(0, 4));
         panel.setBorder(BorderFactory.createTitledBorder("Frequency Sweep Analyzer"));
 
-        // строка 1: диапазон
         JPanel params = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 4));
         params.add(new JLabel("Start (MHz):"));
         txtSweepStart = makeFixedField("990.00", 110, "Начальная частота скана");
@@ -231,16 +244,23 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         params.add(btnSweepToggle);
         panel.add(params, BorderLayout.NORTH);
 
-        // строка 2: IF / fs / FPS / шкала / вид
         JPanel scale = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         scale.add(new JLabel("IF (Hz):"));
-        spinIfHz = new JSpinner(new SpinnerNumberModel(200, 0, 2000, 50));
-        spinIfHz.setPreferredSize(new Dimension(70, 26));
-        spinIfHz.setToolTipText("LO = RF + IF. При fs=40 кГц можно 200…5000 Гц");
+        spinIfHz = new JSpinner(new SpinnerNumberModel(300, 0, 20000, 100));
+        spinIfHz.setPreferredSize(new Dimension(80, 26));
+        spinIfHz.setToolTipText("LO = RF + IF. Держите IF ≈ fs/40 … fs/20");
         scale.add(spinIfHz);
+        lblBeat = new JLabel("beat: —");
+        lblBeat.setForeground(new Color(0, 100, 0));
+        scale.add(lblBeat);
+        spinIfHz.addChangeListener(e -> {
+            if (connection != null && connection.isOpen() && !Double.isNaN(lastPickedFreq)) {
+                applyPicked(lastPickedFreq);
+            }
+        });
 
         scale.add(new JLabel("fs (kHz):"));
-        spinFsKhz = new JSpinner(new SpinnerNumberModel(40, 1, 100, 5));
+        spinFsKhz = new JSpinner(new SpinnerNumberModel(14, 1, 100, 1));
         spinFsKhz.setPreferredSize(new Dimension(65, 26));
         scale.add(spinFsKhz);
         scale.add(new JLabel("FPS:"));
@@ -277,6 +297,9 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         chkFftView = new JCheckBox("FFT view", false);
         chkFftView.addActionListener(e -> spectrumPanel.setShowFft(chkFftView.isSelected()));
         scale.add(chkFftView);
+        chkAutoZoom = new JCheckBox("Auto zoom", true);
+        chkAutoZoom.setToolTipText("После грубого скана автоматически точный скан ±20 кГц шагом 100 Гц");
+        scale.add(chkAutoZoom);
         JButton btnClearMarks = new JButton("Clear marks");
         btnClearMarks.addActionListener(e -> spectrumPanel.clearMarkers());
         scale.add(btnClearMarks);
@@ -332,6 +355,19 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnPauseResume.setBackground(new Color(200, 150, 0));
         btnPauseResume.addActionListener(e -> togglePause());
         p.add(btnPauseResume, gc);
+
+        gc.gridy = 7;
+        lblBeatBig = new JLabel("BEAT: — Hz");
+        lblBeatBig.setFont(new Font("Monospaced", Font.BOLD, 18));
+        lblBeatBig.setForeground(new Color(0, 120, 0));
+        p.add(lblBeatBig, gc);
+
+        gc.gridy = 8;
+        JButton btnAutoTune = new JButton("🎯 AUTO TUNE");
+        btnAutoTune.setBackground(new Color(0, 120, 200));
+        btnAutoTune.setForeground(Color.WHITE);
+        btnAutoTune.addActionListener(e -> autoTune());
+        p.add(btnAutoTune, gc);
         return p;
     }
 
@@ -351,7 +387,6 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         return b;
     }
 
-    // ---------- логика ----------
     private void togglePause() {
         boolean paused = scopePanel.isPaused();
         scopePanel.setPaused(!paused);
@@ -371,17 +406,35 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         }
     }
 
-    // Синхронизация параметров burst-захвата с прошивкой
     private void sendScopeCfg() {
         if (!connection.isOpen()) return;
         int fs = ((Number) spinFsKhz.getValue()).intValue() * 1000;
+        actualFs = fs;
         int fps = ((Number) spinFps.getValue()).intValue();
-//        int n = 250;
-        int n = 120;    // было 250 → кадр 242 байта, влезает в TX-буфер 256
-        if (n * 2 * fps > 9000) n = 9000 / (2 * fps);   // держим канал ≤ ~80%
+        int n = 250;
+        if (n * 2 * fps > 9000) n = 9000 / (2 * fps);
         if (n < 20) n = 20;
         scopePanel.setSampleRate(fs);
+        spectrumPanel.setSampleRate(fs);
         connection.sendRawText(String.format(java.util.Locale.US, "SCOPE_CFG:%d,%d,%d\n", fs, n, 1000 / fps));
+    }
+
+    private void sendCmd() {
+        if (!connection.isOpen()) return;
+        String c = txtCmd.getText().trim();
+        if (c.isEmpty()) return;
+        if (connection.isStreamingActive()) {
+            connection.stopScopeStream();
+            styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
+        }
+        connection.sendRawText(c + "\n");
+        notifyLog(">>> CMD: " + c);
+    }
+
+    private void resetSweepUi() {
+        sweeping = false;
+        btnSweepToggle.setText("▶ RUN SWEEP");
+        btnSweepToggle.setBackground(new Color(0, 100, 200));
     }
 
     private void refreshPorts() {
@@ -419,9 +472,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         btnScopeToggle.setEnabled(false);
         styleToggle(btnScopeToggle, false, "▶ SCOPE ON");
         btnSweepToggle.setEnabled(false);
-        btnSweepToggle.setText("▶ RUN SWEEP");
-        btnSweepToggle.setBackground(new Color(0, 100, 200));
-        sweeping = false;
+        resetSweepUi();
         setStatus(false, "DISCONNECTED");
         lblStatus.setBackground(Color.GRAY);
     }
@@ -434,6 +485,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
             int cpCode = (Integer) cbCpCurrent.getSelectedItem();
             int ldMode = cbLdMode.getSelectedIndex();
             connection.sendControlPacket(freq, cpCode, 0, 0, 6, 200, 0xFF, powerCode, 0, 0, 0, 1, (short) 0, ldMode);
+            if (sweeping) { notifyLog(">>> SWEEP aborted by APPLY"); resetSweepUi(); }
             setStatus(false, "SENDING...");
             lblStatus.setBackground(Color.ORANGE);
         } catch (Exception ex) {
@@ -445,7 +497,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         if (!connection.isOpen()) return;
         try {
             double start = Double.parseDouble(txtSweepStart.getText().trim().replace(',', '.'));
-            double stop  = Double.parseDouble(txtSweepStop.getText().trim().replace(',', '.'));
+            double stop = Double.parseDouble(txtSweepStop.getText().trim().replace(',', '.'));
             double stepK = Double.parseDouble(txtSweepStep.getText().trim().replace(',', '.'));
             if (stop < start || stepK <= 0) throw new IllegalArgumentException("Stop >= Start и Step > 0 обязательны");
             if (connection.isStreamingActive()) {
@@ -455,7 +507,7 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
             spectrumPanel.setRange(start, stop);
             sweepDataPoints.clear();
             spectrumPanel.clearData();
-            String cmd = String.format(java.util.Locale.US, "SWEEP_START:%.2f,%.2f,%.2f\n", start, stop, stepK);
+            String cmd = String.format(java.util.Locale.US, "SWEEP_START:%.3f,%.3f,%.3f\n", start, stop, stepK);
             connection.sendRawText(cmd);
             notifyLog(">>> SENT SWEEP COMMAND: " + cmd.trim());
             sweeping = true;
@@ -469,25 +521,56 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
     private void stopSweep() {
         connection.sendRawText("SWEEP_STOP\n");
         notifyLog(">>> SWEEP STOPPED BY USER");
-        sweeping = false;
-        btnSweepToggle.setText("▶ RUN SWEEP");
-        btnSweepToggle.setBackground(new Color(0, 100, 200));
+        resetSweepUi();
     }
 
-    // Клик по АЧХ: частота + IF, включаем осциллограф
-    private void pickFrequencyFromGraph(double freqMHz) {
-        if (!connection.isOpen()) return;
+    private void applyPicked(double pickedMHz) {
         double ifHz = ((Number) spinIfHz.getValue()).doubleValue();
-        double tuned = freqMHz + ifHz / 1000000.0;
+        double tuned = pickedMHz + ifHz / 1000000.0;
         if (tuned < 23.5) tuned = 23.5;
         if (tuned > 6000.0) tuned = 6000.0;
         txtFreq.setText(String.format(java.util.Locale.US, "%.6f", tuned));
-        notifyLog(String.format(java.util.Locale.US, ">>> PICK %.3f MHz (+IF %.0f Hz) -> LO %.6f MHz", freqMHz, ifHz, tuned));
+        if (lblBeat != null) lblBeat.setText("beat: " + (int) ifHz + " Hz");
+        notifyLog(String.format(java.util.Locale.US, ">>> RETUNE %.3f MHz +IF %.0f Hz -> LO %.6f MHz", pickedMHz, ifHz, tuned));
         sendAll();
+    }
+
+    private void pickFrequencyFromGraph(double freqMHz) {
+        if (!connection.isOpen()) return;
+        if (sweeping) { connection.sendRawText("SWEEP_STOP\n"); resetSweepUi(); }
+        lastPickedFreq = freqMHz;
+        applyPicked(freqMHz);
         if (!connection.isStreamingActive()) {
             sendScopeCfg();
             connection.startScopeStream();
             styleToggle(btnScopeToggle, true, "⏹ SCOPE OFF");
+        }
+    }
+
+    private void autoTune() {
+        if (!connection.isOpen() || Double.isNaN(lastBeatHz)) return;
+        try {
+            double lo = Double.parseDouble(txtFreq.getText().trim().replace(',', '.'));
+            double ifHz = ((Number) spinIfHz.getValue()).doubleValue();
+            tuneBaseLo = lo;
+            tuneBeatMHz = lastBeatHz / 1000000.0;
+            double tryA = lo + tuneBeatMHz + ifHz / 1000000.0;
+            txtFreq.setText(String.format(java.util.Locale.US, "%.6f", tryA));
+            notifyLog(String.format(java.util.Locale.US, ">>> AUTOTUNE try A: %.6f", tryA));
+            sendAll();
+            javax.swing.Timer t = new javax.swing.Timer(700, ev -> {
+                ((javax.swing.Timer) ev.getSource()).stop();
+                if (lastBeatHz > ifHz * 2.5) {
+                    double tryB = tuneBaseLo - tuneBeatMHz + ifHz / 1000000.0;
+                    txtFreq.setText(String.format(java.util.Locale.US, "%.6f", tryB));
+                    notifyLog(String.format(java.util.Locale.US, ">>> AUTOTUNE try B: %.6f", tryB));
+                    sendAll();
+                }
+            });
+            t.setRepeats(false);
+            t.start();
+        } catch (Exception ex) {
+            notifyLog("AUTOTUNE error: " + ex.getMessage());
         }
     }
 
@@ -503,23 +586,47 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
         lblStatus.setBackground(locked ? new Color(0, 180, 0) : new Color(220, 50, 50));
     }
 
-    // ---------- колбэки ----------
     @Override
     public void onLogMessage(String message) {
+        if (message.startsWith("SCOPE_CFG ok:")) {
+            try {
+                int i = message.indexOf("fs=");
+                int j = message.indexOf(' ', i);
+                actualFs = Integer.parseInt(message.substring(i + 3, j));
+                SwingUtilities.invokeLater(() -> {
+                    scopePanel.setSampleRate(actualFs);
+                    spectrumPanel.setSampleRate(actualFs);
+                });
+            } catch (Exception ignored) {}
+        }
         if (message.startsWith("SCAN_RESULT:")) { handleScanResponse(message); return; }
         if (message.startsWith("SWEEP_PEAK:")) {
             try {
                 String[] p = message.split(":")[1].split(",");
-                double f = Double.parseDouble(p[0]);
-                SwingUtilities.invokeLater(() -> spectrumPanel.addMarker(f));
+                final double f = Double.parseDouble(p[0]);
+                SwingUtilities.invokeLater(() -> {
+                    spectrumPanel.addMarker(f);
+                    coarsePeakFreq = f;
+                    if (chkAutoZoom != null && chkAutoZoom.isSelected()) {
+                        double stepK = Double.parseDouble(txtSweepStep.getText().trim().replace(',', '.'));
+                        if (stepK > 0.5) {
+                            javax.swing.Timer t = new javax.swing.Timer(400, ev -> {
+                                ((javax.swing.Timer) ev.getSource()).stop();
+                                txtSweepStart.setText(String.format(java.util.Locale.US, "%.3f", f - 0.02));
+                                txtSweepStop.setText(String.format(java.util.Locale.US, "%.3f", f + 0.02));
+                                txtSweepStep.setText("0.1");
+                                notifyLog(">>> AUTO-ZOOM: fine sweep around " + f);
+                                startSweep();
+                            });
+                            t.setRepeats(false);
+                            t.start();
+                        }
+                    }
+                });
             } catch (Exception ignored) {}
         }
         if (message.startsWith("SWEEP: done") || message.startsWith("SWEEP: stopped")) {
-            SwingUtilities.invokeLater(() -> {
-                sweeping = false;
-                btnSweepToggle.setText("▶ RUN SWEEP");
-                btnSweepToggle.setBackground(new Color(0, 100, 200));
-            });
+            SwingUtilities.invokeLater(this::resetSweepUi);
         }
         SwingUtilities.invokeLater(() -> {
             textLog.append(message + "\n");
@@ -550,10 +657,19 @@ public class Max2870Gui extends JFrame implements EspConnection.ConnectionListen
     @Override
     public void onDataReceived(short[] samples) {
         SwingUtilities.invokeLater(() -> {
-            scopePanel.updateData(samples);                       // один пакет = один кадр
-            if (fftProcessor != null && samples.length > 0) {
-                spectrumPanel.updateSpectrum(fftProcessor.computeSpectrum(samples)); // АЧХ не стирается
+            scopePanel.updateData(samples);
+            if (fftProcessor == null || samples.length == 0) return;
+            double[] sp = fftProcessor.computeSpectrum(samples);
+            spectrumPanel.updateSpectrum(sp);
+            int bi = 3; double bv = -1e9;
+            for (int i = 3; i < sp.length; i++) if (sp[i] > bv) { bv = sp[i]; bi = i; }
+            double beat = bi * actualFs / 512.0;
+            lastBeatHz = beat;
+            if (lblBeatBig != null) {
+                lblBeatBig.setText(String.format(java.util.Locale.US, "BEAT: %.0f Hz", beat));
+                lblBeatBig.setForeground(beat < 1000 ? new Color(0, 150, 0) : new Color(200, 80, 0));
             }
+            if (lblBeat != null) lblBeat.setText(String.format(java.util.Locale.US, "beat: %.0f Hz", beat));
         });
     }
 

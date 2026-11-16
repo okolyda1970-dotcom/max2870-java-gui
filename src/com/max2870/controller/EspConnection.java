@@ -50,7 +50,11 @@ public class EspConnection {
             startReadingLoop();
             notifyLog("Connected to " + portName);
             return true;
-        } catch (Exception e) { notifyError("Ошибка потоков: " + e.getMessage()); closePort(); return false; }
+        } catch (Exception e) {
+            notifyError("Ошибка потоков: " + e.getMessage());
+            closePort();
+            return false;
+        }
     }
 
     public void closePort() {
@@ -96,7 +100,7 @@ public class EspConnection {
         bb.putInt(20, (int) sum);
         try {
             out.write(arr, 0, arr.length); out.flush();
-            notifyLog(String.format(java.util.Locale.US, ">> SEND CTRL: %.2f MHz", freqMHz));
+            notifyLog(String.format(java.util.Locale.US, ">> SEND CTRL: %.6f MHz", freqMHz));
         } catch (Exception e) { notifyError("Send failed: " + e.getMessage()); }
     }
 
@@ -107,7 +111,6 @@ public class EspConnection {
         bb.put(HEADER_CTRL);
         bb.putFloat(-1.0f);
         for (int i = 5; i < 20; i++) bb.put((byte) 0);
-        bb.putShort((short) 0);
         byte[] arr = bb.array();
         long sum = 0;
         for (int i = 0; i < 20; i++) sum += (arr[i] & 0xFF);
@@ -130,15 +133,16 @@ public class EspConnection {
 
     public void sendRawText(String text) {
         if (!isOpen()) return;
-        try { out.write(text.getBytes()); out.flush(); } catch (Exception e) { notifyError("Send raw failed: " + e.getMessage()); }
+        try { out.write(text.getBytes()); out.flush(); }
+        catch (Exception e) { notifyError("Send raw failed: " + e.getMessage()); }
     }
 
     private void startReadingLoop() {
         isRunning.set(true);
         readerThread = new Thread(() -> {
-            byte[] buf = new byte[2048];              // было 512
+            byte[] buf = new byte[2048];
             StringBuilder textAccumulator = new StringBuilder();
-            byte[] dataPacketBuf = new byte[1024];    // <<< было 256 — ГЛАВНАЯ ПРИЧИНА
+            byte[] dataPacketBuf = new byte[1024];   // кадр 502 байта при N=250
             int packetIdx = 0;
             int expectedTotalLen = 0;
             while (isRunning.get() && serialPort != null && serialPort.isOpen()) {
@@ -154,7 +158,6 @@ public class EspConnection {
                                 } else if (packetIdx == 1) {
                                     int count = b & 0xFF;
                                     expectedTotalLen = 2 + (count * 2);
-                                    // защита от ложных заголовков внутри семплов
                                     if (count < 20 || count > 250 || expectedTotalLen > dataPacketBuf.length) {
                                         packetIdx = 0; expectedTotalLen = 0; continue;
                                     }
@@ -174,7 +177,7 @@ public class EspConnection {
                                         textAccumulator.setLength(0);
                                     }
                                 } else {
-                                    textAccumulator.append(c);
+                                    textAccumulator.append(c);   // точки НЕ съедаем
                                     if (textAccumulator.length() > 256) textAccumulator.setLength(0);
                                 }
                             }
@@ -206,13 +209,12 @@ public class EspConnection {
                 samples[j] = (short) v;
             } else return;
         }
-        if (bad > sampleCount / 10) return;   // это был ложный пакет — не тревожим EDT
+        if (bad > sampleCount / 10) return;   // ложный пакет — не тревожим EDT
         if (listener != null) listener.onDataReceived(samples);
     }
 
     private void handleLine(String line) {
         if (line.isEmpty()) return;
-        // строка из одних точек = heartbeat LOCKED (прошивка шлёт "." строкой)
         boolean onlyDots = true;
         for (int i = 0; i < line.length(); i++) if (line.charAt(i) != '.') { onlyDots = false; break; }
         if (onlyDots) { notifyLock(true); return; }
